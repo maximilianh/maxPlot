@@ -470,7 +470,8 @@ function MaxPlot(div, top, left, width, height, args) {
             if ((x < minX) || (x > maxX) || (y < minY) || (y > maxY))
                 continue;
             var xPx = Math.round((x-minX)*xMult)+borderSize;
-            var yPx = winHeight - Math.round((y-minY)*yMult)+borderSize; // flipY
+            // flipY: y-axis is flipped, so we do winHeight - pixel value
+            var yPx = winHeight - Math.round((y-minY)*yMult)+borderSize;
             pixelCoords[2*i] = xPx;
             pixelCoords[2*i+1] = yPx;
         }
@@ -982,7 +983,7 @@ function MaxPlot(div, top, left, width, height, args) {
         // the higher the zoom factor, the higher the alpha value
         var zoomFrac = Math.min(1.0, self.zoomFact/100.0); // zoom as fraction, max is 1.0
         var alpha = self.alpha + 3.0*zoomFrac*(1.0 - self.alpha);
-        alpha = Math.min(0.9, alpha);
+        alpha = Math.min(0.8, alpha);
         console.log("Radius: "+self.radius+", alpha: "+alpha);
 
         if (self.radius===0) {
@@ -1119,8 +1120,9 @@ function MaxPlot(div, top, left, width, height, args) {
         newRange.minX = zr.minX - (xRange*scale*minWeightX);
         newRange.maxX = zr.maxX + (xRange*scale*(1-minWeightX));
 
-        newRange.minY = zr.minY - (yRange*scale*minWeightY);
-        newRange.maxY = zr.maxY + (yRange*scale*(1-minWeightY));
+        // inversed, because we flip the Y axis (flipY)
+        newRange.minY = zr.minY - (yRange*scale*(1-minWeightY));
+        newRange.maxY = zr.maxY + (yRange*scale*(minWeightY));
 
         // extreme zoom factors don't make sense, at some point we reach
         // the limit of the floating point numbers
@@ -1159,7 +1161,7 @@ function MaxPlot(div, top, left, width, height, args) {
 
     this.panEnd = function() {
         /* end a sequence of panBy calls, called when the mouse is released */
-        self.moveBy(self.panDiffX, -self.panDiffY);
+        self.moveBy(self.panDiffX, -self.panDiffY); // -1 because of flipY
         self.panCopy = null;
         self.panDiffX = null;
         self.panDiffY = null;

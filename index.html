@@ -14,7 +14,7 @@
 <input type="text" id="hover"></input>
 <input type="text" id="clicked"></input>
 <button id="random">Random 50k</button>
-<button id="four">Four Dots</button>
+<button id="small">Five circles</button>
 <button id="clear">Clear Select</button>
 <button id="select0">Select Color 0</button>
 
@@ -27,13 +27,13 @@ var fig = new MaxPlot(div, 50, 50, 800, 400, {'radius':30, 'alpha':1.0});
 // we want to see the borders of our plot
 fig.canvas.style.border = "1px solid black";
 
-// draw four little circles
-fig.initPlot({'radius':30, 'alpha':1.0});
-fig.setCoords([1,2, 2,3, 3,4, 4,5]);
-// set four different colors
+// draw small little circles
+fig.initPlot({'radius':30, 'alpha':0.8});
+fig.setCoords([1,2, 2,3, 3,4, 4,5, 2.002, 3.002]);
+// set small different colors
 fig.setColors(["000000", "ff0000", "00ff00", "0000ff"]);
 // and assign every circle its own color
-fig.setColorArr([0, 1, 2, 3]);
+fig.setColorArr([0, 1, 2, 3, 2]);
 // and draw it
 fig.drawDots();
 
@@ -60,11 +60,11 @@ fig.drawDots();
 
 // demo user interface buttons to play with the scatter plot
 
-document.getElementById("four").addEventListener('click', function() {
-    fig.initPlot({'radius':30, 'alpha':1.0});
-    fig.setCoords([1,2, 2,3, 3,4, 4,5]);
+document.getElementById("small").addEventListener('click', function() {
+    fig.initPlot({'radius':30, 'alpha':0.8});
+    fig.setCoords([1,2, 2,3, 3,4, 4,5, 2.002, 3.002]);
     fig.setColors(["000000", "ff0000", "00ff00", "0000ff"]);
-    fig.setColorArr([0, 1, 2, 3]);
+    fig.setColorArr([0, 1, 2, 3, 2]);
     fig.drawDots();
 });
 document.getElementById("clear").addEventListener('click', function() {
