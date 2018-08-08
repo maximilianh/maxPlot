@@ -1,0 +1,71 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MaxPlot Demo</title>
+<head>
+
+<script src="maxPlot.js"></script>
+<script src="normalizeWheel.js"></script>
+
+<link rel='stylesheet' href="https://cdnjs.cloudflare.com/ajax/libs/meyer-reset/2.0/reset.min.css"></style>
+
+</head>
+<body>
+<input type="text" id="selected"></input>
+<input type="text" id="hover"></input>
+<input type="text" id="clicked"></input>
+<button id="random">Random 50k</button>
+<button id="four">Four Dots</button>
+<button id="clear">Clear Select</button>
+<button id="select0">Select Color 0</button>
+
+<script>
+function loadFour() {
+    fig.initPlot({'radius':30, 'alpha':1.0});
+    fig.setCoords([1,2, 2,3, 3,4, 4,5]);
+    fig.setColors(["000000", "ff0000", "00ff00", "0000ff"]);
+    fig.setColorArr([0, 1, 2, 3]);
+    fig.drawDots();
+}
+
+var div = document.createElement('div');
+document.body.appendChild(div);
+
+var fig = new MaxPlot(div, 50, 50, 800, 400, {'radius':30, 'alpha':1.0});
+fig.canvas.style.border = "1px solid black";
+
+
+loadFour();
+
+document.getElementById("four").addEventListener('click', function() {
+    loadFour();
+});
+document.getElementById("clear").addEventListener('click', function() {
+    fig.selectClear();
+    fig.drawDots();
+});
+document.getElementById("select0").addEventListener('click', function() {
+    fig.selectByColor(0);
+    fig.drawDots();
+});
+document.getElementById("random").addEventListener('click', function() {
+    fig.initPlot({'radius':2, 'alpha':0.3});
+    fig.randomDots(50000, 2); 
+});
+fig.onSelChange = function(cellIds) { 
+    document.getElementById("selected").value = cellIds.length+ " selected"; 
+};
+fig.onCellHover = function(cellIds) { 
+    if (cellIds===null)
+        document.getElementById("hover").value = ""; 
+    else
+        document.getElementById("hover").value = cellIds.length+" hover"; 
+};
+fig.onCellClick = function(cellIds) { 
+    if (cellIds===null)
+        document.getElementById("clicked").value = ""; 
+    else
+        document.getElementById("clicked").value = cellIds.length+" clicked"; 
+};
+fig.drawDots();
+</script>
+</body>
