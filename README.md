@@ -11,3 +11,5 @@ It can call javascript functions with the IDs of the circles when the user
 selects or hover over the circles.
 
 Look at index.html for an example how to use it.
+
+You can also play with the example <a href="http://hgwdev.soe.ucsc.edu/~max/maxPlot/">here</a>.
