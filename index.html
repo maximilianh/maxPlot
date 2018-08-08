@@ -14,6 +14,7 @@
 <input type="text" id="hover"></input>
 <input type="text" id="clicked"></input>
 <button id="random">Random 50k</button>
+<button id="random2">Random 250k</button>
 <button id="small">Five circles</button>
 <button id="clear">Clear Select</button>
 <button id="select0">Select Color 0</button>
@@ -78,6 +79,10 @@ document.getElementById("select0").addEventListener('click', function() {
 document.getElementById("random").addEventListener('click', function() {
     fig.initPlot({'radius':2, 'alpha':0.3});
     fig.randomDots(50000, 2); 
+});
+document.getElementById("random2").addEventListener('click', function() {
+    fig.initPlot({'radius':0, 'alpha':0.2});
+    fig.randomDots(250000, 2); 
 });
 </script>
 </body>
