@@ -7,6 +7,7 @@ One difference is that this one will plot up to 1 million circles and without us
 
 It comes with a basic navigation UI: three different modes (zoom, select, move), +/- zoom and 100% zoom.
 
-It can call functions when the user selects or hover over the circles.
+It can call javascript functions with the IDs of the circles when the user
+selects or hover over the circles.
 
 Look at index.html for an example how to use it.

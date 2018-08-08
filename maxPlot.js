@@ -64,6 +64,7 @@ function MaxPlot(div, top, left, width, height, args) {
         selectDiv.style.display  = "none";
         selectDiv.pointerEvents = "none";
         self.div.appendChild(selectDiv);
+        self.selectBox = selectDiv; // we need this later
 
         self.setupMouse();
         
@@ -157,10 +158,6 @@ function MaxPlot(div, top, left, width, height, args) {
 
     function gebi(idStr) {
         return document.getElementById(idStr);
-    }
-
-    function gebc(cname) {
-        return document.getElementsByClassName(cname);
     }
 
     function removeElById(idStr) {
@@ -300,9 +297,20 @@ function MaxPlot(div, top, left, width, height, args) {
         var ctrlDiv = makeCtrlContainer(top, left);
 
         var bSize = gZoomButtonSize;
+
         var selectButton = createButton(bSize, bSize, "mpIconModeSelect", "Select mode. Keyboard: shift or s", null, "img/select.png", 4, true);
+        selectButton.addEventListener ('click',  function() { self.activateMode("select")}, false);
+
         var zoomButton = createButton(bSize, bSize, "mpIconModeZoom", "Zoom-to-rectangle mode. Keyboard: Windows/Command or z", null, "img/zoom.png", 4, true);
+        zoomButton.addEventListener ('click', function() { self.activateMode("zoom")}, false);  
+
         var moveButton = createButton(bSize, bSize, "mpIconModeMove", "Move mode. Keyboard: Alt or m", null, "img/move.png", 4);
+        moveButton.addEventListener('click', function() { self.activateMode("move");}, false);
+
+        self.icons = {};
+        self.icons["move"] = moveButton;
+        self.icons["select"] = selectButton;
+        self.icons["zoom"] = zoomButton;
 
         //ctrlDiv.innerHTML = htmls.join("");
         ctrlDiv.appendChild(selectButton);
@@ -313,14 +321,11 @@ function MaxPlot(div, top, left, width, height, args) {
 
         activateTooltip('.mpIconButton');
 
-        gebi('mpIconModeMove').addEventListener('click', function() { self.activateMode("move");}, false);
-        gebi('mpIconModeZoom').addEventListener ('click', function() { self.activateMode("zoom")}, false);  
-        gebi('mpIconModeSelect').addEventListener ('click',  function() { self.activateMode("select")}, false);
         //gebi('mpZoom100Button').addEventListener ('click', function(ev) { return self.onZoom100Click(ev) } );
     }
 
     function setStatus(text) {
-        document.getElementById("mpStatus").innerHTML = text;
+        self.statusLine.innerHTML = text;
     }
 
     function addStatusLine(top, left, width, height) {
@@ -343,7 +348,9 @@ function MaxPlot(div, top, left, width, height, args) {
         //div.style["box-shadow"]="0px 2px 4px rgba(0,0,0,0.3)";
         //div.style["border-radius"]="2px";
         div.style["cursor"]="pointer";
+        div.style["font-family"] = "sans-serif";
         self.div.appendChild(div);
+        self.statusLine = div;
     }
 
     function addProgressBars(top, left) {
@@ -874,7 +881,6 @@ function MaxPlot(div, top, left, width, height, args) {
     this.onZoom100Click = function(ev) {
         self.zoom100();
         self.drawDots();
-        gebi('mpZoom100Button').blur();
     };
 
     this.scaleData = function() {
@@ -905,7 +911,7 @@ function MaxPlot(div, top, left, width, height, args) {
        zoomDiv.style.top = (self.top+height-gZoomFromBottom)+"px";
        zoomDiv.style.left = (self.left+width-gZoomFromRight)+"px";
 
-       var statusDiv = gebi('mpStatus');
+       var statusDiv = self.statusLine;
        statusDiv.style.top = (self.top+height-gStatusHeight)+"px";
        statusDiv.style.width = width+"px";
 
@@ -1340,9 +1346,9 @@ function MaxPlot(div, top, left, width, height, args) {
        self.mouseDownY = null;
        self.lastPanX = null;
        self.lastPanY = null;
-       gebi("mpSelectBox").style.display = "none";
-       gebi("mpSelectBox").style.width = 0;
-       gebi("mpSelectBox").style.height = 0;
+       self.selectBox.style.display = "none";
+       self.selectBox.style.width = 0;
+       self.selectBox.style.height = 0;
     };
 
     this.drawMarquee = function(x1, y1, x2, y2) {
@@ -1351,7 +1357,7 @@ function MaxPlot(div, top, left, width, height, args) {
         var selectHeight = Math.abs(y1 - y2);
         var minX = Math.min(x1, x2);
         var minY = Math.min(y1, y2);
-        var div = gebi("mpSelectBox");
+        var div = self.selectBox;
         div.style.left = minX+"px";
         div.style.top = minY+"px";
         div.style.width = selectWidth+"px";
@@ -1534,12 +1540,11 @@ function MaxPlot(div, top, left, width, height, args) {
        self.canvas.addEventListener('mousedown', self.onMouseDown);
        self.canvas.addEventListener("mousemove", self.onMouseMove);
        self.canvas.addEventListener("mouseup", self.onMouseUp);
-       gebi("mpSelectBox").addEventListener("mouseup", self.onMouseUp);
+       // when the user moves the mouse, the mouse is often NOT on the canvas,
+       // but on the marquee box, so connect this one, too.
+       self.selectBox.addEventListener("mouseup", self.onMouseUp);
 
        self.canvas.addEventListener("wheel", self.onWheel);
-       // mouse wheel
-       //var hamster = Hamster(self.canvas);
-       //hamster.wheel(self.onHamster);
     };
 
     this.setShowLabels = function(doShow) {
@@ -1564,13 +1569,13 @@ function MaxPlot(div, top, left, width, height, args) {
 
         self.resetMarquee();
 
-        gebi("mpIconModeMove").style.backgroundColor = gButtonBackground; 
-        gebi("mpIconModeZoom").style.backgroundColor = gButtonBackground; 
-        gebi("mpIconModeSelect").style.backgroundColor = gButtonBackground; 
+        self.icons["move"].style.backgroundColor = gButtonBackground; 
+        self.icons["zoom"].style.backgroundColor = gButtonBackground; 
+        self.icons["select"].style.backgroundColor = gButtonBackground; 
+        self.icons[modeName].style.backgroundColor = gButtonBackgroundClicked; 
 
-        var upModeName = modeName[0].toUpperCase() + modeName.slice(1);
-        var buttonId = "mpIconMode"+upModeName;
-        gebi(buttonId).style.backgroundColor = gButtonBackgroundClicked; 
+        //var upModeName = modeName[0].toUpperCase() + modeName.slice(1);
+        //var buttonId = "mpIconMode"+upModeName;
     }
 
     this.randomDots = function(n, radius, mode) {
