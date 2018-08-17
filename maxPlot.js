@@ -429,15 +429,12 @@ function MaxPlot(div, top, left, width, height, args) {
             var y = annot[1];
             var text = annot[2];
             // XX ignore anything outside of current zoom range. Performance?
-            if ((x < minX) || (x > maxX) || (y < minY) || (y > maxY)) {
+            if ((x < minX) || (x > maxX) || (y < minY) || (y > maxY))
                 pxLabels.push(null);
                 continue;
-            }
-            else {
-                var xPx = Math.round((x-minX)*xMult)+borderSize;
-                var yPx = Math.round((y-minY)*yMult)+borderSize;
-                pxLabels.push([xPx, yPx, text]);
-            }
+            var xPx = Math.round((x-minX)*xMult)+borderSize;
+            var yPx = Math.round((y-minY)*yMult)+borderSize;
+            pxLabels.push([xPx, yPx, text]);
         }
         return pxLabels;
     }
@@ -979,7 +976,7 @@ function MaxPlot(div, top, left, width, height, args) {
         var baseRadius = self.initRadius;
         if (baseRadius===0)
             baseRadius = 0.7;
-        self.radius = Math.floor(Math.sqrt(baseRadius * self.zoomFact));
+        self.radius = Math.floor(baseRadius * Math.sqrt(self.zoomFact));
 
         self.clear();
 
