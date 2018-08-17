@@ -541,7 +541,9 @@ function MaxPlot(div, top, left, width, height, args) {
     }
 
     function drawLabels(ctx, labelCoords, winWidth, winHeight, zoomFact) {
-        /* given an array of [x, y, text], draw the text. returns bounding boxes as array of [x1, y1, x2, y2]  */
+        /* given an array of [x, y, text], draw the text. returns bounding
+         * boxes as array of [x1, y1, x2, y2]  */
+
         console.time("labels");
         ctx.save();
         ctx.font = "bold "+gTextSize+"px Sans-serif"
@@ -563,8 +565,11 @@ function MaxPlot(div, top, left, width, height, args) {
 
         for (var i=0; i < labelCoords.length; i++) {
             var coord = labelCoords[i];
-            if (coord===null) // outside of view range
+            if (coord===null) { // outside of view range
+                bboxArr.push( null );
                 continue
+            }
+
             var x = coord[0];
             var y = coord[1];
             var text = coord[2];
@@ -922,7 +927,6 @@ function MaxPlot(div, top, left, width, height, args) {
        self.scaleData();
        //clearCanvas(self.ctx, width, height);
        self.drawDots();
-
     };
 
     this.setCoords = function(coords, clusterLabels, minX, maxX, minY, maxY) {
