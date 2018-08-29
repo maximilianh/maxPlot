@@ -6,7 +6,6 @@
 // remove onNoHover
 // fix mouseout into body -> marquee stays
 // fix the aspect ratio of the zoom marquee
-// fix radius 30 being actually 8, do not use sqrt
 
 function getAttr(obj, attrName, def) {
     var val = obj[attrName];
@@ -429,11 +428,12 @@ function MaxPlot(div, top, left, width, height, args) {
             var y = annot[1];
             var text = annot[2];
             // XX ignore anything outside of current zoom range. Performance?
-            if ((x < minX) || (x > maxX) || (y < minY) || (y > maxY))
+            if ((x < minX) || (x > maxX) || (y < minY) || (y > maxY)) {
                 pxLabels.push(null);
                 continue;
+            }
             var xPx = Math.round((x-minX)*xMult)+borderSize;
-            var yPx = Math.round((y-minY)*yMult)+borderSize;
+            var yPx = winHeight - Math.round((y-minY)*yMult)+borderSize;
             pxLabels.push([xPx, yPx, text]);
         }
         return pxLabels;
@@ -597,6 +597,8 @@ function MaxPlot(div, top, left, width, height, args) {
                 // a perfect solution would take much more time
                 for (var j=0; j < bboxArr.length; j++) {
                     var bbox = bboxArr[j];
+                    if (bbox===null) // = outside of screen
+                        continue;
                     var bx1 = bbox[0];
                     var by1 = bbox[1];
                     var bx2 = bbox[2];
@@ -929,6 +931,7 @@ function MaxPlot(div, top, left, width, height, args) {
     this.setCoords = function(coords, clusterLabels, minX, maxX, minY, maxY) {
        /* specify new coordinates of circles to draw, an array of (x,y) coordinates */
        /* Scale data to current screen dimensions */
+       /* clusterLabels is optional: array of [x, y, labelString]*/
        /* minX, maxX, etc are optional */
        // "==null" checks for both undefined and null
        if (coords.length === 0)
@@ -1291,8 +1294,10 @@ function MaxPlot(div, top, left, width, height, args) {
         var boxes = self.pxLabelBbox;
 
         for (var i=0; i < labelCoords.length; i++) {
-            var labelText = clusterLabels[i][2];
             var box = boxes[i];
+            if (box===null) // = outside of the screen
+                continue;
+            var labelText = clusterLabels[i][2];
             var x1 = box[0];
             var y1 = box[1];
             var x2 = box[2];
@@ -1441,7 +1446,7 @@ function MaxPlot(div, top, left, width, height, args) {
        var clientX = ev.clientX;
        var clientY = ev.clientY;
        if (ev.altKey || self.dragMode==="move") {
-           console.log("background mouse down, with meta");
+           console.log("alt key or move mode: starting panning");
            self.panStart();
        } 
        self.mouseDownX = clientX;
@@ -1450,7 +1455,12 @@ function MaxPlot(div, top, left, width, height, args) {
 
     this.onMouseUp = function(ev) {
        console.log("background mouse up");
-       if (self.panCopy!==null) {
+       // these are screen coordinates
+       var clientX = ev.clientX;
+       var clientY = ev.clientY;
+       var mouseDidNotMove = (self.mouseDownX === clientX && self.mouseDownY === clientY);
+
+       if (self.panCopy!==null && !mouseDidNotMove) {
            console.log("ending panning operation");
            self.panEnd();
            self.mouseDownX = null;
@@ -1464,10 +1474,7 @@ function MaxPlot(div, top, left, width, height, args) {
            console.log("first click must have been outside of canvas");
            return;
        }
-       // these are screen coordinates
-       var clientX = ev.clientX;
-       var clientY = ev.clientY;
-       
+
        // the subsequent operations require canvas coordinates x/y
        var canvasTop = self.top;
        var canvasLeft = self.left;
@@ -1477,7 +1484,7 @@ function MaxPlot(div, top, left, width, height, args) {
        var y2 = clientY - canvasTop;
 
        // user did not move the mouse, so this is a click
-       if (self.mouseDownX === clientX && self.mouseDownY === clientY) {
+       if (mouseDidNotMove) {
             var clickedLabel = self.labelAt(x2, y2);
             if (clickedLabel!==null)
                 self.onLabelClick(clickedLabel, ev);
@@ -1533,7 +1540,10 @@ function MaxPlot(div, top, left, width, height, args) {
         console.log(normWheel);
         var pxX = ev.clientX - self.left;
         var pxY = ev.clientY - self.top;
-        var zoomFact = 1+(0.10*normWheel.spinY);
+        var spinFact = 0.1;
+        if (ev.ctrlKey) // = OSX pinch and zoom gesture
+            spinFact = 0.02;  // is too fast, so slow it down a little
+        var zoomFact = 1-(spinFact*normWheel.spinY);
         console.log("Wheel Zoom by "+zoomFact);
         self.zoomBy(zoomFact, pxX, pxY);
         self.drawDots();
