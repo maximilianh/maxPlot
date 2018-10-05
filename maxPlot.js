@@ -978,10 +978,10 @@ function MaxPlot(div, top, left, width, height, args) {
 
         //ctx.strokeStyle = '#EEEEEE'; 
         //ctx.lineWidth = 5; 
-        ctx.fillStyle = "rgba(200, 200, 200)";
+        ctx.fillStyle = "rgba(220, 220, 220)";
         ctx.textBaseline = "top";
         //ctx.textAlign = "left";
-        ctx.fillText(self.title,50,5); 
+        ctx.fillText(self.title,5,self.height - gTextSize - 3); 
         ctx.restore();
     };
 
