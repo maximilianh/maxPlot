@@ -136,7 +136,7 @@ function MaxPlot(div, top, left, width, height, args) {
         self.dotClickX = null;
         self.dotClickY = null;
 
-        self.activateMode(getAttr(args, "mode", "select"));
+        self.activateMode(getAttr(args, "mode", "move"));
     };
     
     // call the constructor
@@ -151,6 +151,11 @@ function MaxPlot(div, top, left, width, height, args) {
        self.canvas.style.left = left+"px";
        self.canvas.style.top = top+"px";
     };
+
+    this.setTitle = function (text) {
+        self.title = text;
+    };
+
 
     // -- (private) helper functions
     // -- these are normal functions, not methods, they do not access "self"
@@ -312,9 +317,9 @@ function MaxPlot(div, top, left, width, height, args) {
         self.icons["zoom"] = zoomButton;
 
         //ctrlDiv.innerHTML = htmls.join("");
+        ctrlDiv.appendChild(moveButton);
         ctrlDiv.appendChild(selectButton);
         ctrlDiv.appendChild(zoomButton);
-        ctrlDiv.appendChild(moveButton);
 
         self.div.appendChild(ctrlDiv);
 
@@ -965,9 +970,29 @@ function MaxPlot(div, top, left, width, height, args) {
        self.colors = colors;
     };
 
+    this.drawTitle = function() {
+        var ctx = self.ctx;
+        ctx.save();
+        ctx.font = "bold "+gTextSize+"px Sans-serif"
+        //ctx.globalAlpha = 1.0;
+
+        //ctx.strokeStyle = '#EEEEEE'; 
+        //ctx.lineWidth = 5; 
+        ctx.fillStyle = "rgba(200, 200, 200)";
+        ctx.textBaseline = "top";
+        //ctx.textAlign = "left";
+        ctx.fillText(self.title,50,5); 
+        ctx.restore();
+    };
+
     this.drawDots = function() {
         /* draw coordinates to canvas with current colors */
         console.time("draw");
+
+        self.clear();
+
+        if (self.title!==undefined)
+            self.drawTitle();
 
         if (self.alpha===undefined)
              alert("internal error: alpha is not defined");
@@ -984,8 +1009,6 @@ function MaxPlot(div, top, left, width, height, args) {
         if (baseRadius===0)
             baseRadius = 0.7;
         self.radius = Math.floor(baseRadius * Math.sqrt(self.zoomFact));
-
-        self.clear();
 
         // the higher the zoom factor, the higher the alpha value
         var zoomFrac = Math.min(1.0, self.zoomFact/100.0); // zoom as fraction, max is 1.0
