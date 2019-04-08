@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>MaxHeat Demo</title>
+<head>
+
+<script src="maxHeat.js"></script>
+<script src="https://split.js.org/split.min.js"></script>
+
+<link rel='stylesheet' href="https://cdnjs.cloudflare.com/ajax/libs/meyer-reset/2.0/reset.min.css"></style>
+
+</head>
+<body>
+<div id="demoDiv" style="width:900px; height:400px"></div>
+
+<script>
+//<div id="container">
+    //<div class="split" style="background-color: blue; position:absolute; top:0px; width:100px" id="left_pane">content one</div>
+    //<div class="split" style="background-color: red; position:absolute; left:100px; width:100px" id="right_pane">content two</div>
+//</div>
+
+//$("#left_pane").resizable({
+  //handles: 'e',
+  //resize: function() {
+    //$("#right_pane").outerWidth( $("#container").innerWidth() - $("#left_pane").outerWidth() );
+  //}
+//});
+
+// first create an empty div
+var div = document.getElementById("demoDiv");
+
+// create the heatmap
+var rowLabels = ["PITX2", "SOD1", "HOXB2"];
+var colLabels = ["cell1", "sampleA", "sampleB", "sampleC", "and fourth"];
+var data = [
+  [1,1,0,3,0],
+  [1,2,3,3,3],
+  [1,3,2,0,1]
+];
+
+var plt = new MaxHeat(div, {});
+plt.setPalette(["#F0F0F0", "#845EC2", "#FF6F91", "#F9F871"])
+plt.loadData(rowLabels, colLabels, data, 4);
+plt.loadRandomData(30, 800, 4);
+plt.draw();
+// we want to see the borders of our plot
+plt.canvas.style.border = "1px solid black";
+</script>
+</body>

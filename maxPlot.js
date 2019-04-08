@@ -1,11 +1,10 @@
 'use strict';
 // maxPlot: a fast scatter plot class
 /*jshint globalstrict: true*/
+/*jshint -W069 */
 
 // TODO:
-// remove onNoHover
 // fix mouseout into body -> marquee stays
-// fix the aspect ratio of the zoom marquee
 
 function getAttr(obj, attrName, def) {
     var val = obj[attrName];
@@ -16,9 +15,17 @@ function getAttr(obj, attrName, def) {
 }
 
 function cloneObj(d) {
-/* returns a copy of an object, wasteful */
+/* returns a deep copy of an object, wasteful and destroys old references */
     // see http://stackoverflow.com/questions/122102/what-is-the-most-efficient-way-to-deep-clone-an-object-in-javascript
     return JSON.parse(JSON.stringify(d));
+}
+
+function copyObj(src, trg) {
+/* object copying: copies all values from src to trg */
+    var key;
+    for (key in src) {
+        trg[key] = src[key]; // copies each property to the objCopy object
+  }
 }
 
 
@@ -28,10 +35,13 @@ function MaxPlot(div, top, left, width, height, args) {
     // top, left: position in pixels, integers
     // width and height: integers, in pixels, includes the status line
     
+    const HIDCOORD = 12345; // magic value for missing coordinates
+    
     var self = this; // 'this' has two conflicting meanings in javascript. 
     // I use 'self' to refer to object variables, so I can use 'this' to refer to the caller context
     
     const gTextSize = 16; // size of cluster labels
+    const gTitleSize = 18; // size of title text
     const gStatusHeight = 12; // height of status bar
     const gZoomButtonSize = 30; // size of zoom buttons
     const gZoomFromRight = 60;  // position of zoom buttons from right
@@ -50,30 +60,48 @@ function MaxPlot(div, top, left, width, height, args) {
         self.ctx = null; // the canvas context
         self.canvas = addCanvasToDiv(div, top, left, width, height-gStatusHeight );
 
-        addZoomButtons(top+height-gZoomFromBottom, left+width-gZoomFromRight, self);
-        addModeButtons(top+10, left+10, self);
-        addStatusLine(top+height-gStatusHeight, left, width, gStatusHeight);
+        self.interact = false;
+
+        if (args && args.showClose===true) {
+            var button = addCloseButton(top+10, left+width-60);
+        }
+
+        if (args===undefined || (args["interact"]!==false)) {
+            self.interact = true;
+
+            addZoomButtons(top+height-gZoomFromBottom, left+width-gZoomFromRight, self);
+            addModeButtons(top+10, left+10, self);
+            addStatusLine(top+height-gStatusHeight, left, width, gStatusHeight);
+            addTitleDiv(top+height-gTitleSize-gStatusHeight, left+5);
+
+            /* add the div used for the mouse selection/zoom rectangle to the DOM */
+            var selectDiv = document.createElement('div');
+            selectDiv.id = "mpSelectBox";
+            selectDiv.style.border = "1px dotted black";
+            selectDiv.style.position = "absolute";
+            selectDiv.style.display  = "none";
+            selectDiv.style.pointerEvents = "none";
+            self.div.appendChild(selectDiv);
+
+            // callbacks when user clicks or hovers over label or cell 
+            self.onLabelClick = null; // called on label click, args: text of label and event
+            self.onCellClick = null; // called on cell click, args: array of cellIds and event
+            self.onCellHover = null; // called on cell hover, arg: array of cellIds
+            self.onNoCellHover = null; // called on hover over empty background
+            self.onSelChange = null; // called when the selection has been changed, arg: array of cell Ids
+            self.onLabelHover = null; // called when mouse hovers over a label
+            self.onNoLabelHover = null; // called when mouse does not hover over a label
+            // self.onZoom100Click: called when user clicks the zoom100 button. Implemented below.
+            self.selectBox = selectDiv; // we need this later
+            self.setupMouse();
+
+            self.childPlot = null;    // is used: plot that is sync'ed from here
+            self.parentPlot = null;   // is used: plot that sync's to us
+        }
+
         addProgressBars(top+Math.round(height*0.3), left+30);
 
-        /* add the div used for the mouse selection/zoom rectangle to the DOM */
-        var selectDiv = document.createElement('div');
-        selectDiv.id = "mpSelectBox";
-        selectDiv.style.border = "1px dotted black";
-        selectDiv.style.position = "absolute";
-        selectDiv.style.display  = "none";
-        selectDiv.pointerEvents = "none";
-        self.div.appendChild(selectDiv);
-        self.selectBox = selectDiv; // we need this later
-
-        self.setupMouse();
         
-        // callbacks when user clicks or hovers over label or cell 
-        self.onLabelClick = null; // called on label click, args: text of label and event
-        self.onCellClick = null; // called on cell click, args: array of cellIds and event
-        self.onCellHover = null; // called on cell hover, arg: array of cellIds
-        self.onNoCellHover = null; // called on hover over empty background
-        self.onSelChange = null; // called when the selection has been changed, arg: array of cell Ids
-        // self.onZoom100Click: called when user clicks the zoom100 button. Implemented below.
 
         // timer that is reset on every mouse move
         self.timer = null;
@@ -96,33 +124,50 @@ function MaxPlot(div, top, left, width, height, args) {
         // for this to work, the body has to really cover the whole page
         //document.body.style.height = "100vh";
     }
+
+    function isHidden(x, y) {
+        /* special coords are used for circles that are off-screen or otherwise not visible */
+       return ((x===HIDCOORD && y===HIDCOORD)) // not shown (e.g. no coordinate or off-screen)
+    }
     
+    this.initPort = function(args) {
+        /* init all viewport related state (zoom, radius, alpha) */
+        self.port = {}; 
+        self.port.zoomRange = {}; // object with keys minX, , maxX, minY, maxY
+        self.port.radius     = getAttr(args, "radius", null);    // current radius of the circles, 0=one pixel dots
+        self.port.doDrawLabels = true;  // should cluster labels be drawn?
+
+        // we keep a copy of the 'initial' arguments at 100% zoom
+        self.port.initZoom   = {};
+        self.port.initRadius = self.port.radius;                      // circle radius at full zoom
+        self.port.initAlpha   = getAttr(args, "alpha", 0.3);
+    };
+
     this.initPlot = function(args) {
         /* create a new scatter plot on the canvas */
         if (args===undefined)
             args = {};
 
+        self.globalOpts = args;
+
         self.mode = 1;   // drawing mode
 
-        self.zoomRange = null; // object with keys minX, , maxX, minY, maxY
-        self.coords     = null;
-        self.clusterLabels = null; // cluster labels, array of [x,y,text]
 
-        self.pxCoords   = null;   // coordinates of cells as screen pixels or 0,0 if not shown
-        self.pxLabels   = null;   // cluster labels in pixels, array of [x,y,text] 
-        self.pxLabelBbox = null;   // cluster label bounding boxes, array of [x1,x2,x2,y2]
+        // everything related to circle coordinates
+        self.coords = {};
+        self.coords.orig = null;   // coordinates of cells in original coordinates
+        self.coords.px   = null;   // coordinates of cells as screen pixels or 0,0 if not shown
+        self.coords.labels    = null;   // cluster label positions in pixels, array of [x,y,text] 
+        self.coords.labelBbox = null;   // cluster label bounding boxes, array of [x1,x2,x2,y2]
 
-        self.doDrawLabels = true;  // should cluster labels be drawn?
 
-        self.colors     = null;   // list of six-digit hex codes
-        self.colorArr   = null;   // length is pxCoords/2, one byte per cell = index into self.colors
-        self.radius     = getAttr(args, "radius", null);    // current radius of the circles, 0=one pixel dots
-        self.alpha      = getAttr(args, "alpha", 0.3);
-        self.selCells   = null;  // IDs of cells that are "selected" and as such highlighted in some way
+        self.col = {};
+        self.col.pal = null;        // list of six-digit hex codes 
+        self.col.arr = null;        // length is coords.px/2, one byte per cell = index into self.col.pal
 
-        // we keep a copy of the 'initial' arguments at 100% zoom
-        self.initZoom   = cloneObj(self.zoomRange);
-        self.initRadius = self.radius;                      // circle radius at full zoom
+        self.selCells   = [];  // IDs of cells that are selected (drawn in black)
+
+        self.initPort(args);
 
         // mouse drag is modal: can be "select", "move" or "zoom"
         self.dragMode = "select";
@@ -154,6 +199,7 @@ function MaxPlot(div, top, left, width, height, args) {
 
     this.setTitle = function (text) {
         self.title = text;
+        self.titleDiv.innerHTML = text;
     };
 
 
@@ -270,6 +316,7 @@ function MaxPlot(div, top, left, width, height, args) {
         ctrlDiv.appendChild(plusDiv);
         ctrlDiv.appendChild(fullDiv);
         ctrlDiv.appendChild(minusDiv);
+        self.zoomDiv = ctrlDiv;
 
         self.div.appendChild(ctrlDiv);
 
@@ -278,6 +325,40 @@ function MaxPlot(div, top, left, width, height, args) {
         plusDiv.addEventListener('click', function() { self.zoomBy(1.333); self.drawDots(); });
     }
     
+    function addTitleDiv(top, left) {
+        var div = document.createElement('div');
+        div.style.cursor = "default";
+        div.style.left = left+"px";
+        div.style.top = top+"px";
+        div.style.display = "block";
+        div.style.position = "absolute";
+        div.style.fontSize = gTitleSize;
+        div.id = 'mpTitle';
+        div.style['color'] = "#B0B0B0";
+        self.div.appendChild(div);
+        self.titleDiv = div;
+    }
+
+    function addCloseButton(top, left) {
+        var div = document.createElement('div');
+        div.style.cursor = "default";
+        div.style.left = left+"px";
+        div.style.top = top+"px";
+        div.style.display = "block";
+        div.style.position = "absolute";
+        div.style.fontSize = gTitleSize;
+        div.style.padding = "3px";
+        div.style.borderRadius = "3px";
+        div.style.border = "1px solid #c5c5c5";
+        div.style.backgroundColor = "#f6f6f6";
+        div.style.color = "#454545";
+        div.id = 'mpCloseButton';
+        div.textContent = "Close";
+        self.div.appendChild(div);
+        self.closeButtonDiv = div;
+        return div;
+    }
+
     function appendButton(parentDiv, id, title, imgName) {
         /* add a div styled like a button under div */
         var div = document.createElement('div');
@@ -288,16 +369,6 @@ function MaxPlot(div, top, left, width, height, args) {
 
     function addModeButtons(top, left, self) {
         /* add the zoom/move/select control buttons to the DOM */
-        //var htmls = [];
-        //htmls.push('<div id="mpIcons" style="display:inline-block">');
-        //htmls.push('<div style="vertical-align:top">');
-        //htmls.push('<div title="Select mode.<br>Keyboard: shift or s" id="mpIconModeSelect"><img src="img/select.png"></button>');
-        //htmls.push('<div title="Zoom-to-rectangle mode. Keyboard: Windows/Command or z" id="mpIconModeZoom" style="display: block; margin-right:0"><img src="img/zoom.png"></button>');
-        //htmls.push('<div data-placement="bottom" title="Move mode. Keyboard: Alt or m" id="mpIconModeMove" data-toggle="tooltip" class="ui-button tpIconButton" class="mpModeButton" style="margin-right:0"><img src="img/move.png"></button>');
-        //htmls.push('</div>');
-        //htmls.push('<button title="Zoom to 100%, showing all data, keyboard: space" data-placement="bottom" data-toggle="tooltip" id="mpZoom100Button" class="ui-button tpIconButton" style="font-size:10px; font-weight: bold; margin-top: 4px; margin-right:0; display:block; padding:0">100%</button>');
-        //<img style="width:22px; height:22px" src="img/center.png">
-
         var ctrlDiv = makeCtrlContainer(top, left);
 
         var bSize = gZoomButtonSize;
@@ -322,10 +393,9 @@ function MaxPlot(div, top, left, width, height, args) {
         ctrlDiv.appendChild(zoomButton);
 
         self.div.appendChild(ctrlDiv);
+        self.toolDiv = ctrlDiv;
 
         activateTooltip('.mpIconButton');
-
-        //gebi('mpZoom100Button').addEventListener ('click', function(ev) { return self.onZoom100Click(ev) } );
     }
 
     function setStatus(text) {
@@ -345,12 +415,7 @@ function MaxPlot(div, top, left, width, height, args) {
         div.style["border-left"]="1px solid #DDD";
         div.style["border-right"]="1px solid #DDD";
         div.style["border-top"]="1px solid #DDD";
-        //div.style["border-bottom"]="1px solid #DDD";
         div.style["font-size"]=(gStatusHeight-1)+"px";
-        //div.style["vertical-align"]="middle";
-        //div.style["line-height"]=(height-2)+"px";
-        //div.style["box-shadow"]="0px 2px 4px rgba(0,0,0,0.3)";
-        //div.style["border-radius"]="2px";
         div.style["cursor"]="pointer";
         div.style["font-family"] = "sans-serif";
         self.div.appendChild(div);
@@ -435,11 +500,12 @@ function MaxPlot(div, top, left, width, height, args) {
             // XX ignore anything outside of current zoom range. Performance?
             if ((x < minX) || (x > maxX) || (y < minY) || (y > maxY)) {
                 pxLabels.push(null);
-                continue;
             }
-            var xPx = Math.round((x-minX)*xMult)+borderSize;
-            var yPx = winHeight - Math.round((y-minY)*yMult)+borderSize;
-            pxLabels.push([xPx, yPx, text]);
+            else {
+                var xPx = Math.round((x-minX)*xMult)+borderSize;
+                var yPx = winHeight - Math.round((y-minY)*yMult)+borderSize;
+                pxLabels.push([xPx, yPx, text]);
+            }
         }
         return pxLabels;
     }
@@ -471,14 +537,18 @@ function MaxPlot(div, top, left, width, height, args) {
         for (var i = 0; i < coords.length/2; i++) {
             var x = coords[i*2];
             var y = coords[i*2+1];
-            // simply ignore anything outside of current zoom range.
-            if ((x < minX) || (x > maxX) || (y < minY) || (y > maxY))
-                continue;
-            var xPx = Math.round((x-minX)*xMult)+borderSize;
-            // flipY: y-axis is flipped, so we do winHeight - pixel value
-            var yPx = winHeight - Math.round((y-minY)*yMult)+borderSize;
-            pixelCoords[2*i] = xPx;
-            pixelCoords[2*i+1] = yPx;
+            // set everything outside of current zoom range as hidden
+            if ((x < minX) || (x > maxX) || (y < minY) || (y > maxY)) {
+                pixelCoords[2*i] = HIDCOORD; // see isHidden()
+                pixelCoords[2*i+1] = HIDCOORD;
+            }
+            else {
+                var xPx = Math.round((x-minX)*xMult)+borderSize;
+                // flipY: y-axis is flipped, so we do winHeight - pixel value
+                var yPx = winHeight - Math.round((y-minY)*yMult)+borderSize;
+                pixelCoords[2*i] = xPx;
+                pixelCoords[2*i+1] = yPx;
+            }
         }
 
         console.timeEnd("scale");
@@ -486,6 +556,7 @@ function MaxPlot(div, top, left, width, height, args) {
     }
 
     function drawRect(ctx, pxCoords, coordColors, colors, radius, alpha, selCells) {
+        /* draw not circles but tiny rectangles. Maybe good enough for 2pixels sizes */
        console.log("Drawing "+coordColors.length+" rectangles, with fillRect");
        ctx.save();
        ctx.globalAlpha = alpha;
@@ -494,7 +565,7 @@ function MaxPlot(div, top, left, width, height, args) {
        for (var i = 0; i < pxCoords.length/2; i++) {
            var pxX = pxCoords[2*i];
            var pxY = pxCoords[2*i+1];
-           if (pxX===0 && pxY===0)
+           if (isHidden(pxX, pxY))
                continue;
            var col = colors[coordColors[i]];
            ctx.fillStyle="#"+col;
@@ -505,16 +576,16 @@ function MaxPlot(div, top, left, width, height, args) {
        // draw the selection as black rectangles
        ctx.globalAlpha = 0.7;
        ctx.fillStyle="black";
-       if (selCells!==null)
-           for (i = 0; i < selCells.length; i++) {
-               var cellId = selCells[i];
-               var pxX = pxCoords[2*cellId];
-               var pxY = pxCoords[2*cellId+1];
-               ctx.fillRect(pxX-radius, pxY-radius, dblSize, dblSize);
-               count += 1;
-           }
+       for (i = 0; i < selCells.length; i++) {
+           var cellId = selCells[i];
+           var pxX = pxCoords[2*cellId];
+           var pxY = pxCoords[2*cellId+1];
+           ctx.fillRect(pxX-radius, pxY-radius, dblSize, dblSize);
+           count += 1;
+       }
        console.log(count+" rectangles drawn (including selection)");
        ctx.restore();
+       return count;
     }
 
     function drawCirclesStupid(ctx, pxCoords, coordColors, colors, radius, alpha, selCells) {
@@ -522,9 +593,12 @@ function MaxPlot(div, top, left, width, height, args) {
        console.log("Drawing "+coordColors.length+" circles with stupid renderer");
        ctx.globalAlpha = alpha;
        var dblSize = 2*radius;
+       var count = 0;
        for (var i = 0; i < pxCoords.length/2; i++) {
            var pxX = pxCoords[2*i];
            var pxY = pxCoords[2*i+1];
+           if (isHidden(pxX, pxY))
+               continue;
            var col = colors[coordColors[i]];
            ctx.fillStyle="#"+col;
            //ctx.fillRect(pxX-size, pxY-size, dblSize, dblSize);
@@ -532,7 +606,9 @@ function MaxPlot(div, top, left, width, height, args) {
            ctx.arc(pxX, pxY, radius, 0, 2 * Math.PI);
            ctx.closePath();
            ctx.fill();
+           count++;
        }
+       return count;
     }
 
     function intersectRect(r1left, r1right, r1top, r1bottom, r2left, r2right, r2top, r2bottom) {
@@ -569,7 +645,7 @@ function MaxPlot(div, top, left, width, height, args) {
             var coord = labelCoords[i];
             if (coord===null) { // outside of view range
                 bboxArr.push( null );
-                continue
+                continue;
             }
 
             var x = coord[0];
@@ -579,10 +655,6 @@ function MaxPlot(div, top, left, width, height, args) {
             var textWidth = Math.round(ctx.measureText(text).width);
             // move x to the left, so text is centered on x
             x = x - Math.round(textWidth*0.5);
-
-            // don't draw labels where the midpoint is off-screen
-            if (x<0 || y<0 || x>winWidth || y>winWidth)
-                continue;
 
             var textX1 = x;
             var textY1 = y;
@@ -618,6 +690,12 @@ function MaxPlot(div, top, left, width, height, args) {
                         }
                 }
             }
+            // don't draw labels where the midpoint is off-screen
+            if (x<0 || y<0 || x>winWidth || y>winWidth) {
+                bboxArr.push( null );
+                continue;
+            }
+
 
             ctx.strokeText(text,x,y); 
             ctx.fillText(text,x,y); 
@@ -714,7 +792,7 @@ function MaxPlot(div, top, left, width, height, args) {
        for (var i = 0; i < pxCoords.length/2; i++) {
            var pxX = pxCoords[2*i];
            var pxY = pxCoords[2*i+1];
-           if (pxX===0 && pxY===0)
+           if (isHidden(pxX, pxY))
                continue;
            var col = coordColors[i];
            count++;
@@ -724,23 +802,22 @@ function MaxPlot(div, top, left, width, height, args) {
        
        // overdraw the selection as solid black circle outlines
        ctx.globalAlpha = 0.7;
-       if (selCells!==null) {
-           for (i = 0; i < selCells.length; i++) {
-               var cellId = selCells[i];
-               var pxX = pxCoords[2*cellId];
-               var pxY = pxCoords[2*cellId+1];
-               if (pxX===0 && pxY===0)
-                   continue;
-               // make sure that old leftover overlapping black circles don't shine through
-               var col = coordColors[cellId];
-               ctx.drawImage(off, col * tileWidth, 0, tileWidth, tileHeight, pxX - radius -1, pxY - radius-1, tileWidth, tileHeight);
+       for (i = 0; i < selCells.length; i++) {
+           var cellId = selCells[i];
+           var pxX = pxCoords[2*cellId];
+           var pxY = pxCoords[2*cellId+1];
+           if (isHidden(pxX, pxY))
+               continue;
+           // make sure that old leftover overlapping black circles don't shine through
+           var col = coordColors[cellId];
+           ctx.drawImage(off, col * tileWidth, 0, tileWidth, tileHeight, pxX - radius -1, pxY - radius-1, tileWidth, tileHeight);
 
-               ctx.drawImage(off, selImgId * tileWidth, 0, tileWidth, tileHeight, pxX - radius -1, pxY - radius-1, tileWidth, tileHeight);
-           }
+           ctx.drawImage(off, selImgId * tileWidth, 0, tileWidth, tileHeight, pxX - radius -1, pxY - radius-1, tileWidth, tileHeight);
        }
 
        console.log(count +" circles drawn");
        ctx.restore();
+       return count;
     }
 
     function hexToInt(colors) {
@@ -771,7 +848,7 @@ function MaxPlot(div, top, left, width, height, args) {
        for (var i = 0; i < pxCoords.length/2; i++) {
            var pxX = pxCoords[2*i];
            var pxY = pxCoords[2*i+1];
-           if (pxX===0 && pxY===0)
+           if (isHidden(pxX, pxY))
                continue;
            var p = 4 * (pxY*width+pxX); // pointer to red value of pixel at x,y
 
@@ -807,11 +884,13 @@ function MaxPlot(div, top, left, width, height, args) {
        var rgbColors = hexToInt(colors);
        var invAlpha = 1.0 - alpha;
 
+       var count = 0;
+
        // alpha-blend pixels into array
        for (var i = 0; i < pxCoords.length/2; i++) {
            var pxX = pxCoords[2*i];
            var pxY = pxCoords[2*i+1];
-           if (pxX===0 && pxY===0)
+           if (isHidden(pxX, pxY))
                continue;
            var p = 4 * (pxY*width+pxX); // pointer to red value of pixel at x,y
 
@@ -832,23 +911,24 @@ function MaxPlot(div, top, left, width, height, args) {
            cData[p+1] = mixG;
            cData[p+2] = mixB;
            cData[p+3] = 255; // no transparency... ever?
+           count++;
        }
        
        // overdraw the selection as black pixels
-       if (selCells!==null)
-           for (i = 0; i < selCells.length; i++) {
-               var cellId = selCells[i];
-               var pxX = pxCoords[2*cellId];
-               var pxY = pxCoords[2*cellId+1];
-               if (pxX===0 && pxY===0)
-                   continue;
-               var p = 4 * (pxY*width+pxX); // pointer to red value of pixel at x,y
-               cData[p] = 0; 
-               cData[p+1] = 0;
-               cData[p+2] = 0;
-           }
+       for (i = 0; i < selCells.length; i++) {
+           var cellId = selCells[i];
+           var pxX = pxCoords[2*cellId];
+           var pxY = pxCoords[2*cellId+1];
+           if (isHidden(pxX, pxY))
+               continue;
+           var p = 4 * (pxY*width+pxX); // pointer to red value of pixel at x,y
+           cData[p] = 0; 
+           cData[p+1] = 0;
+           cData[p+2] = 0;
+       }
 
        self.ctx.putImageData(canvasData, 0, 0);
+       return count;
     }
 
     function findRange(coords) {
@@ -880,13 +960,13 @@ function MaxPlot(div, top, left, width, height, args) {
     function clearCanvas(ctx, width, height) {
     /* clear with a white background */
         // jsperf says this is fastest on Chrome, and still OK-ish in FF
-        console.time("clear");
+        //console.time("clear");
         ctx.save();
         ctx.globalAlpha = 1.0;
         ctx.fillStyle = "rgb(255,255,255)";
         ctx.fillRect(0, 0, width, height);
         ctx.restore();
-        console.timeEnd("clear");
+        //console.timeEnd("clear");
     }
 
     // -- object methods (=access the self object)
@@ -898,92 +978,132 @@ function MaxPlot(div, top, left, width, height, args) {
 
     this.scaleData = function() {
        /* scale coords and labels to current zoom range, write results to pxCoords and pxLabels */
-       var borderMargin = self.radius;
-       self.pxCoords = scaleCoords(self.coords, borderMargin, self.zoomRange, self.canvas.width, self.canvas.height);
+       var borderMargin = self.port.radius;
+       self.calcRadius();
 
-       self.pxLabels = null;
-       if (self.clusterLabels!==undefined && self.clusterLabels!==null)
-           self.pxLabels = scaleLabels(self.clusterLabels, self.zoomRange, borderMargin, self.canvas.width, self.canvas.height);
+       self.coords.px = scaleCoords(self.coords.orig, borderMargin, self.port.zoomRange, self.canvas.width, self.canvas.height);
+       //self.coords.labels = null;
+       if (self.coords.labels!==undefined && self.coords.labels!==null)
+           self.coords.pxLabels = scaleLabels(self.coords.labels, self.port.zoomRange, borderMargin, self.canvas.width, self.canvas.height);
+
+       if (self.childPlot) {
+            self.childPlot.coords = self.coords;
+        }
     }
 
-    this.setSize = function(width, height) {
-       /* resize canvas on the page re-scale the data and re-draw */
+    this.setTopLeft = function(top, left) {
+        /* set top and left position in pixels of the canvas */
+        self.top = top;
+        self.left = left;
+        self.canvas.style.top = top+"px";
+        self.canvas.style.left = left+"px";
+
+        self.setSize(self.width, self.height, false); // resize the various buttons
+    }
+
+    this.setSize = function(width, height, doRedraw) {
+       /* resize canvas on the page re-scale the data and re-draw, unless doRedraw is false */
        
        // css and canvas sizes: these must be identical, otherwise canvas gets super slow
-       var canvWidth = width;
-       var canvHeight = height-gStatusHeight;
-       self.canvas.style.width = canvWidth+"px";
-       self.canvas.style.height = canvHeight+"px";
-       self.canvas.width = canvWidth;
-       self.canvas.height = canvHeight;
-
+       self.canvas.style.width = width+"px";
+       self.canvas.width = width;
        self.width = width;
+
+       self.canvas.style.height = height+"px";
+       self.canvas.height = height;
        self.height = height;
 
-       var zoomDiv = gebi('mpCtrls');
-       zoomDiv.style.top = (self.top+height-gZoomFromBottom)+"px";
-       zoomDiv.style.left = (self.left+width-gZoomFromRight)+"px";
+       self.zoomDiv.style.top = (self.top+height-gZoomFromBottom)+"px";
+       self.zoomDiv.style.left = (self.left+width-gZoomFromRight)+"px";
 
        var statusDiv = self.statusLine;
        statusDiv.style.top = (self.top+height-gStatusHeight)+"px";
        statusDiv.style.width = width+"px";
 
+       self.titleDiv.style.top = (self.top+height-gStatusHeight-gTitleSize)+"px";
+
        self.scaleData();
        //clearCanvas(self.ctx, width, height);
-       self.drawDots();
+       if (doRedraw===undefined || doRedraw===true)
+           self.drawDots();
     };
 
-    this.setCoords = function(coords, clusterLabels, minX, maxX, minY, maxY) {
+    this.setCoords = function(coords, clusterLabels, minX, maxX, minY, maxY, opts) {
        /* specify new coordinates of circles to draw, an array of (x,y) coordinates */
        /* Scale data to current screen dimensions */
        /* clusterLabels is optional: array of [x, y, labelString]*/
-       /* minX, maxX, etc are optional */
-       // "==null" checks for both undefined and null
+       /* minX, maxX, etc are optional 
+        * opts are optional arguments like radius, alpha etc, see initPlot/args */
+       var coordOpts = cloneObj(self.globalOpts);
+       copyObj(opts, coordOpts);
+       self.initPort(coordOpts);
+
        if (coords.length === 0)
            alert("cbDraw-setCoords called with no coordinates");
 
+       var newZr = {};
        if (minX===undefined || maxX===undefined || minY===undefined || maxY===undefined)
-           self.initZoom = findRange(coords);
-       else
-           self.initZoom = {minX:minX, maxX:maxX, minY:minY, maxY:maxY}
-       self.zoomRange = cloneObj(self.initZoom);
+           newZr = findRange(coords);
+       else {
+           newZr = {minX:minX, maxX:maxX, minY:minY, maxY:maxY};
+       }
 
-       self.coords = coords;
-       self.clusterLabels = clusterLabels;
-       setStatus((coords.length/2)+" "+self.gSampleDescription+"s loaded");
+       copyObj(newZr, self.port.initZoom);
+       copyObj(self.port.initZoom, self.port.zoomRange);
+
+       self.coords.orig = coords;
+       self.coords.labels = clusterLabels;
+
+       var count = 0;
+       for (var i = 0; i < coords.length/2; i++) {
+           var cellX = coords[i*2];
+           var cellY = coords[i*2+1];
+           if (!(isHidden(cellX, cellY)))
+               count++;
+       }
+
+       //setStatus((coords.length/2)+" "+self.gSampleDescription+"s loaded");
+       setStatus(count+ " visible " + self.gSampleDescription+"s loaded");
 
        self.scaleData();
-       if (self.radius===null || self.radius==undefined) {
-           self.radius = guessRadius(coords.length);
-           self.initRadius = self.radius;
-           }
     };
 
     this.setColorArr = function(colorArr) {
     /* set the color array, one array with one index per coordinate */
-       self.colorArr = colorArr;
+       self.col.arr = colorArr;
     };
 
     this.setColors = function(colors) {
     /* set the colors, one for each value of a in setColorArr(a). colors is an
      * array of six-digit hex strings. Not #-prefixed! */
-       self.colors = colors;
+       self.col.pal = colors;
     };
 
-    this.drawTitle = function() {
-        var ctx = self.ctx;
-        ctx.save();
-        ctx.font = "bold "+gTextSize+"px Sans-serif"
-        //ctx.globalAlpha = 1.0;
+    this.calcRadius = function() {
+        /* calculate the radius from current zoom factor and set radius, alpha and zoomFact in self.port */
+        // make the circles a bit smaller than expected
+        var zr = self.port.zoomRange;
+        var iz = self.port.initZoom;
+        var initAlpha = self.port.initAlpha;
+        var initSpan = iz.maxX-iz.minX;
+        var currentSpan = zr.maxX-zr.minX;
+        var zoomFact = initSpan/currentSpan;
 
-        //ctx.strokeStyle = '#EEEEEE'; 
-        //ctx.lineWidth = 5; 
-        ctx.fillStyle = "rgba(220, 220, 220)";
-        ctx.textBaseline = "top";
-        //ctx.textAlign = "left";
-        ctx.fillText(self.title,5,self.height - gTextSize - 3); 
-        ctx.restore();
-    };
+        var baseRadius = self.port.initRadius;
+        if (baseRadius===0)
+            baseRadius = 0.7;
+        var radius = Math.floor(baseRadius * Math.sqrt(zoomFact));
+
+        // the higher the zoom factor, the higher the alpha value
+        var zoomFrac = Math.min(1.0, zoomFact/100.0); // zoom as fraction, max is 1.0
+        var alpha = initAlpha + 3.0*zoomFrac*(1.0 - initAlpha);
+        alpha = Math.min(0.8, alpha);
+        console.log("Zoom factor: ", zoomFact, ", Radius: "+radius+", alpha: "+alpha);
+
+        self.port.zoomFact = zoomFact;
+        self.port.alpha = alpha;
+        self.port.radius = radius;
+    }
 
     this.drawDots = function() {
         /* draw coordinates to canvas with current colors */
@@ -991,65 +1111,59 @@ function MaxPlot(div, top, left, width, height, args) {
 
         self.clear();
 
-        if (self.title!==undefined)
-            self.drawTitle();
+        var radius = self.port.radius;
+        var alpha = self.port.alpha;
+        var zoomFact = self.port.zoomFact;
+        var coords = self.coords.px;
+        var pal = self.col.pal;
+        var colArr = self.col.arr;
+        var count = 0;
 
-        if (self.alpha===undefined)
+        if (alpha===undefined)
              alert("internal error: alpha is not defined");
-        if (self.pxCoords===null)
+        if (coords===null)
              alert("internal error: cannot draw if coordinates are not set yet");
-        if (self.colorArr.length !== (self.pxCoords.length>>1))
-            alert("internal error: cbDraw.drawDots - colorArr is not 1/2 of coords array. Got "+self.colors.length+" color values but coordinates for "+(self.pxCoords.length/2)+" cells.");
+        if (colArr.length !== (coords.length>>1))
+            alert("internal error: cbDraw.drawDots - colorArr is not 1/2 of coords array. Got "+pal.length+" color values but coordinates for "+(coords.length/2)+" cells.");
 
-        self.zoomFact = ((self.initZoom.maxX-self.initZoom.minX)/(self.zoomRange.maxX-self.zoomRange.minX));
-
-        console.log("Zoom factor: "+self.zoomFact);
-        // make the circles a bit smaller than expected
-        var baseRadius = self.initRadius;
-        if (baseRadius===0)
-            baseRadius = 0.7;
-        self.radius = Math.floor(baseRadius * Math.sqrt(self.zoomFact));
-
-        // the higher the zoom factor, the higher the alpha value
-        var zoomFrac = Math.min(1.0, self.zoomFact/100.0); // zoom as fraction, max is 1.0
-        var alpha = self.alpha + 3.0*zoomFrac*(1.0 - self.alpha);
-        alpha = Math.min(0.8, alpha);
-        console.log("Radius: "+self.radius+", alpha: "+alpha);
-
-        if (self.radius===0) {
-            drawPixels(self.ctx, self.canvas.width, self.canvas.height, self.pxCoords, 
-                self.colorArr, self.colors, alpha, self.selCells);
+        if (radius===0) {
+            count = drawPixels(self.ctx, self.canvas.width, self.canvas.height, coords, 
+                colArr, pal, alpha, self.selCells);
         }
 
-        else if (self.radius===1 || self.radius===2) {
-            drawRect(self.ctx, self.pxCoords, self.colorArr, self.colors, self.radius, alpha, self.selCells);
+        else if (radius===1 || radius===2) {
+            count = drawRect(self.ctx, coords, colArr, pal, radius, alpha, self.selCells);
         }
         else {
-
             switch (self.mode) {
                 case 0:
-                    drawCirclesStupid(self.ctx, self.pxCoords, self.colorArr, self.colors, self.radius, alpha, self.selCells);
+                    count = drawCirclesStupid(self.ctx, coords, colArr, pal, radius, alpha, self.selCells);
                     break;
                 case 1:
-                    drawCirclesDrawImage(self.ctx, self.pxCoords, self.colorArr, self.colors, self.radius, alpha, self.selCells);
+                    count = drawCirclesDrawImage(self.ctx, coords, colArr, pal, radius, alpha, self.selCells);
                     break;
                 case 2:
                     break;
             }
         }
 
+        self.count = count;
+        
         console.timeEnd("draw");
 
-        if (self.doDrawLabels===true && self.pxLabels!==null) {
-            self.pxLabelBbox = drawLabels(self.ctx, self.pxLabels, self.canvas.width, self.canvas.height, self.zoomFact);
+        if (self.port.doDrawLabels===true && self.coords.labels!==null) {
+            self.coords.labelBbox = drawLabels(self.ctx, self.coords.pxLabels, self.canvas.width, self.canvas.height, zoomFact);
         }
+
+        if (self.childPlot)
+            self.childPlot.drawDots();
     };
 
     this.cellsAtPixel = function(x, y) {
         /* return the Ids of all cells at a particular pixel */
         var res = [];
-        var pxCoords = self.pxCoords;
-        for (var i = 0; i < self.pxCoords.length/2; i++) {
+        var pxCoords = self.coords.px;
+        for (var i = 0; i < pxCoords.length/2; i++) {
             var cellX = pxCoords[i*2];
             var cellY = pxCoords[i*2+1];
             if (cellX===x || cellY===y)
@@ -1061,8 +1175,8 @@ function MaxPlot(div, top, left, width, height, args) {
     this.cellsInRect = function(x1, y1, x2, y2) {
         /* return the Ids of all cells within certain pixel boundaries */
         var res = [];
-        var pxCoords = self.pxCoords;
-        for (var i = 0; i < self.pxCoords.length/2; i++) {
+        var pxCoords = self.coords.px;
+        for (var i = 0; i < pxCoords.length/2; i++) {
             var cellX = pxCoords[i*2];
             var cellY = pxCoords[i*2+1];
             if ((cellX >= x1) && (cellX <= x2) && (cellY >= y1) && (cellY <= y2))
@@ -1071,22 +1185,18 @@ function MaxPlot(div, top, left, width, height, args) {
         return res;
     };
 
-    //this.setSelection = function (idList) {
-        /* select some dots. idList is a list of integers. Specify null to clear. */
-        //self.selCells = new FastBitSet(idList);
-    //};
-
     this.zoom100 = function() {
        /* zoom to 100% and redraw */
-       self.zoomRange = cloneObj(self.initZoom);
+       copyObj(self.port.initZoom, self.port.zoomRange);
        self.scaleData();
-       self.radius = self.initRadius;
+       //self.radius = self.initRadius;
        self.drawDots();
     };
 
     this.zoomTo = function(x1, y1, x2, y2) {
        /* zoom to rectangle defined by two points */
        // make sure that x1<x2 and y1<y2 - can happen if mouse movement was upwards
+       console.log("Zooming to pixels: ", x1, y1, x2, y2);
        var pxMinX = Math.min(x1, x2);
        var pxMaxX = Math.max(x1, x2);
 
@@ -1097,12 +1207,12 @@ function MaxPlot(div, top, left, width, height, args) {
        // by adapting the height. This is what Microsoft software does
        // It may be better to fix the aspect ratio of the zoom rectangle while zooming?
        // We probably do not want to distort the ratio.
-       var aspectRatio = self.width / self.height;
-       var rectWidth  = (pxMaxX-pxMinX);
-       var newHeight = rectWidth/aspectRatio;
-       pxMaxY = pxMinY + newHeight;
+       //var aspectRatio = self.width / self.height;
+       //var rectWidth  = (pxMaxX-pxMinX);
+       //var newHeight = rectWidth/aspectRatio;
+       //pxMaxY = pxMinY + newHeight;
 
-       var zoomRange = self.zoomRange;
+       var zoomRange = self.port.zoomRange;
        // window size in data coordinates
        var spanX = zoomRange.maxX - zoomRange.minX;
        var spanY = zoomRange.maxY - zoomRange.minY;
@@ -1120,7 +1230,8 @@ function MaxPlot(div, top, left, width, height, args) {
        zoomRange.maxX = oldMinX + (pxMaxX * xMult);
        zoomRange.maxY = oldMinY + (pxMaxY * yMult);
 
-       self.zoomRange = zoomRange;
+       self.port.zoomRange = zoomRange;
+       console.log("Marquee zoom window: "+JSON.stringify(self.port.zoomRange));
 
        self.scaleData();
     };
@@ -1130,10 +1241,10 @@ function MaxPlot(div, top, left, width, height, args) {
      * zoomFact = 1.2 means zoom +20%
      * zoomFact = 0.8 means zoom -20%
      * */
-        var zr = self.zoomRange;
-        var iz = self.initZoom;
+        var zr = self.port.zoomRange;
+        var iz = self.port.initZoom;
 
-        console.log("zoomfact "+self.zoomFact);
+        console.log("old zoomfact "+self.port.zoomFact);
 
         var xRange = Math.abs(zr.maxX-zr.minX);
         var yRange = Math.abs(zr.maxY-zr.minY);
@@ -1163,9 +1274,28 @@ function MaxPlot(div, top, left, width, height, args) {
         console.log("x min max "+zr.minX+" "+zr.maxX);
         console.log("y min max "+zr.minY+" "+zr.maxY);
        
-        self.zoomRange = newRange;
+        self.port.zoomRange = newRange;
         self.scaleData();
         return newRange;
+    };
+
+    this.movePerc = function(xDiffFrac, yDiffFrac) {
+        /* move a certain percentage of current view. xDiff/yDiff are floats, e.g. 0.1 is 10% up */
+        var zr = self.port.zoomRange;
+        var xRange = Math.abs(zr.maxX-zr.minX);
+        var yRange = Math.abs(zr.maxY-zr.minY);
+
+        var xDiffAbs = xRange*xDiffFrac;
+        var yDiffAbs = yRange*yDiffFrac;
+
+        var newRange = {};
+        newRange.minX = zr.minX + xDiffAbs;
+        newRange.maxX = zr.maxX + xDiffAbs;
+        newRange.minY = zr.minY + yDiffAbs;
+        newRange.maxY = zr.maxY + yDiffAbs;
+
+        copyObj(newRange, self.port.zoomRange);
+        self.scaleData();
     };
 
     this.panStart = function() {
@@ -1197,22 +1327,25 @@ function MaxPlot(div, top, left, width, height, args) {
         self.panDiffY = null;
     }
 
+    // BEGIN SELECTION METHODS (could be an object?)
+    
     this.selectClear = function() {
         /* clear selection */
-        self.selCells = null;
+        self.selCells.length = 0;
         setStatus("");
         if (self.onSelChange!==null)
             self.onSelChange([]);
     };
 
+    this.selectSet = function(cellIds) {
+        /* set selection to an array of integer cellIds */
+        self.selCells.length = 0;
+        self.selCells.push(...cellIds); // "extend" = array spread syntax, https://davidwalsh.name/spread-operator
+        self._selUpdate();
+    };
+
     this.selectAdd = function(cellIdx) {
         /* add a single cell to the selection. If it already exists, remove it. */
-        if (self.selCells===null) {
-            self.selCells = [cellIdx];
-            self._selUpdate();
-            return;
-        }
-
         console.time("selectAdd");
         var foundIdx = self.selCells.indexOf(cellIdx);
         if (foundIdx===-1)
@@ -1225,17 +1358,14 @@ function MaxPlot(div, top, left, width, height, args) {
 
     this.selectVisible = function() {
         /* add all visible cells to selection */
-        if (self.selCells === null)
-            self.selCells = [];
-
         var selCells = self.selCells;
-        var pxCoords = self.pxCoords;
+        var pxCoords = self.coords.px;
         for (var i = 0; i < pxCoords.length/2; i++) {
             var pxX = pxCoords[2*i];
             var pxY = pxCoords[2*i+1];
-            if (pxX===0 && pxY===0)
-                continue;
-            selCells.push(i);
+            if (isHidden(pxX, pxY))
+               continue;
+            selCells.push(i); // XX: DUPLICATES?
         }
         self.selCells = selCells;
         self._selUpdate();
@@ -1243,16 +1373,14 @@ function MaxPlot(div, top, left, width, height, args) {
 
     this.selectByColor = function(colIdx) {
         /* add all cells with a given color to the selection */
-        var colArr = self.colorArr;
+        var colArr = self.col.arr;
         var selCells = self.selCells;
-        if (selCells===null)
-            selCells = [];
         for (var i = 0; i < colArr.length; i++) {
             if (colArr[i]===colIdx)
-                selCells.push(i);
+                selCells.push(i); // XX  duplicates ?
         }
         self.selCells = selCells;
-        console.log(self.selCells.length+" cells selected, by color");
+        console.log(self.selCells.length+" cells appended to selection, by color");
         self._selUpdate();
     };
 
@@ -1265,23 +1393,50 @@ function MaxPlot(div, top, left, width, height, args) {
         var maxY = Math.max(y1, y2);
 
         console.time("select");
-        if (self.selCells===null)
-            self.selCells = [];
-
-        var pxCoords = self.pxCoords;
+        var pxCoords = self.coords.px;
         for (var i = 0; i < pxCoords.length/2; i++) {
             var pxX = pxCoords[2*i];
             var pxY = pxCoords[2*i+1];
-            if (pxX===0 && pxY===0)
-                continue;
+            if (isHidden(pxX, pxY))
+               continue;
             if ((minX <= pxX) && (pxX <= maxX) && (minY <= pxY) && (pxY <= maxY)) {
-                self.selCells.push(i);
+                self.selCells.push(i); // XX  duplicates?
             }
 
         }
         console.timeEnd("select");
         self._selUpdate();
     };
+
+    this.getSelection = function() {
+        /* return selected cells as a list of ints */
+        return self.selCells;
+    };
+    
+    this.selectInvert = function() {
+        /* invert selection */
+        var selCells = self.selCells;
+        var selCellsObj = new Set();
+        for (var i = 0; i < selCells.length; i++) { // IE11 doesn't have array init constructor
+                selCellsObj.add(selCells[i]);
+        }
+
+        selCells.length = 0; // keep the same object
+        var cellCount = self.getCount();
+        for (var i = 0; i < cellCount; i++) {
+            if (! selCellsObj.has(i))
+                selCells.push(i);
+        }
+        self.selCells = selCells;
+        self._selUpdate();
+    };
+    
+    this.getCount = function() {
+        /* return maximum number of cells in dataset, may include hidden cells, see isHidden() */
+        return self.coords.orig.length;
+    };
+    
+    // END SELECTION METHODS (could be an object?)
 
     this._selUpdate = function() {
         /* called after the selection has been updated, calls the onSelChange callback */
@@ -1294,7 +1449,7 @@ function MaxPlot(div, top, left, width, height, args) {
         /* update the pxCoords by a certain x/y distance and redraw */
 
         // convert pixel range to data scale range
-        var zr = self.zoomRange;
+        var zr = self.port.zoomRange;
         var xDiffData = xDiff * ((zr.maxX - zr.minX) / self.canvas.width);
         var yDiffData = yDiff * ((zr.maxY - zr.minY) / self.canvas.height);
         
@@ -1308,26 +1463,29 @@ function MaxPlot(div, top, left, width, height, args) {
     };
 
     this.labelAt = function(x, y) {
-        /* return the text of the label at position x,y or null if nothing there */
+        /* return the index and the text of the label at position x,y or null if nothing there */
         //console.time("labelCheck");
-        var clusterLabels = self.clusterLabels;
+        var clusterLabels = self.coords.labels;
         if (clusterLabels===null || clusterLabels===undefined)
             return null;
-        var labelCoords = self.pxLabels;
-        var boxes = self.pxLabelBbox;
+        var labelCoords = self.coords.labels;
+        var boxes = self.coords.labelBbox;
+
+        if (labelCoords.length!==clusterLabels.length)
+            alert("internal error maxPLot.js: coordinates of labels are different from clusterLabels");
 
         for (var i=0; i < labelCoords.length; i++) {
             var box = boxes[i];
             if (box===null) // = outside of the screen
                 continue;
-            var labelText = clusterLabels[i][2];
             var x1 = box[0];
             var y1 = box[1];
             var x2 = box[2];
             var y2 = box[3];
             if ((x >= x1) && (x <= x2) && (y >= y1) && (y <= y2)) {
                 //console.timeEnd("labelCheck");
-                return labelText;
+                var labelText = clusterLabels[i][2];
+                return [labelText, i];
             }
         }
         //console.timeEnd("labelCheck");
@@ -1336,25 +1494,28 @@ function MaxPlot(div, top, left, width, height, args) {
 
     this.cellsAt = function(x, y) {
         /* check which cell's bounding boxes contain (x, y), return a list of the cell IDs, sorted by distance */
-        console.time("cellSearch");
-        var pxCoords = self.pxCoords;
+        //console.time("cellSearch");
+        var pxCoords = self.coords.px;
+        if (pxCoords===null)
+            return null;
         var possIds = [];
+        var radius = self.port.radius;
         for (var i = 0; i < pxCoords.length/2; i++) {
            var pxX = pxCoords[2*i];
            var pxY = pxCoords[2*i+1];
-           if (pxX===0 && pxY===0)
+            if (isHidden(pxX, pxY))
                continue;
-            var x1 = pxX - self.radius;
-            var y1 = pxY - self.radius;
-            var x2 = pxX + self.radius;
-            var y2 = pxY + self.radius;
+            var x1 = pxX - radius;
+            var y1 = pxY - radius;
+            var x2 = pxX + radius;
+            var y2 = pxY + radius;
             if ((x >= x1) && (x <= x2) && (y >= y1) && (y <= y2)) {
                 var dist = Math.sqrt(Math.pow(x-pxX, 2) + Math.pow(y-pxY, 2));
                 possIds.push([dist, i]);
             }
         }
 
-        console.timeEnd("cellSearch");
+        //console.timeEnd("cellSearch");
         if (possIds.length===0)
             return null;
         else {
@@ -1369,13 +1530,11 @@ function MaxPlot(div, top, left, width, height, args) {
         }
     };
 
-    this.getSelection = function() {
-        /* return selected cells as a list of ints */
-        return self.selCells;
-    };
-
     this.resetMarquee = function() {
        /* make the marquee disappear and reset its internal status */
+       if (!self.interact)
+           return;
+
        self.mouseDownX = null;
        self.mouseDownY = null;
        self.lastPanX = null;
@@ -1385,10 +1544,16 @@ function MaxPlot(div, top, left, width, height, args) {
        self.selectBox.style.height = 0;
     };
 
-    this.drawMarquee = function(x1, y1, x2, y2) {
+    this.drawMarquee = function(x1, y1, x2, y2, forceAspect) {
         /* draw the selection or zooming marquee using the DIVs created by setupMouse */
         var selectWidth = Math.abs(x1 - x2);
-        var selectHeight = Math.abs(y1 - y2);
+        var selectHeight = 0;
+        if (forceAspect) {
+            var aspectRatio = self.width / self.height;
+            selectHeight = selectWidth/aspectRatio;
+        } else
+            selectHeight = Math.abs(y1 - y2);
+
         var minX = Math.min(x1, x2);
         var minY = Math.min(y1, y2);
         var div = self.selectBox;
@@ -1398,16 +1563,6 @@ function MaxPlot(div, top, left, width, height, args) {
         div.style.height = selectHeight+"px";
         div.style.display = "block";
     };
-
-    //this.onHamster = function(ev, delta, deltaX, deltaY) {
-      //console.log(delta, deltaX, deltaY);
-      //console.log(ev);
-      //var pxX = ev.originalEvent.clientX - self.left;
-      //var pxY = ev.originalEvent.clientY - self.top;
-      //self.zoomBy(1+(0.01*delta), pxX, pxY);
-      //self.drawDots();
-      //ev.preventDefault();
-    //};
 
     this.onMouseMove = function(ev) {
         /* called when the mouse is moved over the Canvas */
@@ -1428,43 +1583,81 @@ function MaxPlot(div, top, left, width, height, args) {
         var xCanvas = clientX - canvasLeft;
         var yCanvas = clientY - canvasTop;
 
-        // when the cursor is over a label, change it to a hand
-        if (self.pxLabelBbox!==null && self.pxLabels!==null) {
+        // when the cursor is over a label, change it to a hand, but only when there is no marquee
+        if (self.coords.labelBbox!==null && self.mouseDownX === null) {
             var labelInfo = self.labelAt(xCanvas, yCanvas);
-            if (labelInfo===null)
+            if (labelInfo===null) {
                 self.canvas.style.cursor = self.canvasCursor;
-            else {
+                self.onNoLabelHover(ev);
+            } else {
                 self.canvas.style.cursor = 'pointer'; // not 'hand' anymore ! and not 'grab' yet!
                 if (self.onLabelHover!==null)
-                    self.onLabelHover(labelInfo, ev);
+                    self.onLabelHover(labelInfo[0], labelInfo[1], ev);
                 }
         }
 
         if (self.mouseDownX!==null) {
+            // we're panning
             if ((ev.altKey || self.dragMode==="move") && self.panCopy!==null) {
                 var xDiff = self.mouseDownX - clientX;
                 var yDiff = self.mouseDownY - clientY;
                 self.panBy(xDiff, yDiff);
             }
-            else 
-                self.drawMarquee(self.mouseDownX, self.mouseDownY, clientX, clientY);
+            else  {
+               // zooming or selecting
+               var forceAspect = false;
+               var anyKey = (ev.metaKey || ev.altKey || ev.shiftKey);
+               if ((self.dragMode==="zoom" && !anyKey) || ev.metaKey )
+                   forceAspect = true;
+               self.drawMarquee(self.mouseDownX, self.mouseDownY, clientX, clientY, forceAspect);
+            }
         }
     };
 
     this.onNoMouseMove = function() {
         /* called after some time has elapsed and the mouse has not been moved */
+        if (self.coords.px===null)
+            return;
         var x = self.lastMouseX - self.left; // need canvas, not screen coordinates
         var y = self.lastMouseY - self.top;
         var cellIds = self.cellsAt(x, y);
         // only call onNoCellHover if callback exists and there is nothing selected
-        if (cellIds===null && self.onNoCellHover!==null && self.selCells===null )
+        if (cellIds===null && self.onNoCellHover!==null && self.selCells===null)
                 self.onNoCellHover();
         else if (self.onCellHover!==null)
                 self.onCellHover(cellIds);
     };
 
+    this.activatePlot = function() {
+        /* draw black border around plot, remove black border from all connected plots, call onActive */
+        if (self.parentPlot===null)
+            return false;
+
+        // only need to do something if we're not already the active plot
+        self.canvas.style["border"] = "2px solid black";
+        self.parentPlot.canvas.style["border"] = "2px solid white";
+
+        // flip the parent/child relationship
+        self.childPlot = self.parentPlot;
+        self.childPlot.parentPlot = self;
+        self.parentPlot = null;
+        self.childPlot.childPlot = null;
+
+        // hide/show the tool and zoom buttons
+        self.childPlot.zoomDiv.style.display = "none";
+        self.childPlot.toolDiv.style.display = "none";
+        self.zoomDiv.style.display = "block";
+        self.toolDiv.style.display = "block";
+
+        // notify the UI
+        self.onActiveChange(self);
+        return true;
+    }
+
     this.onMouseDown = function(ev) {
     /* user clicks onto canvas */
+       if (self.activatePlot())
+           return; // ignore the first click into the plot, if it was the activating click
        console.log("background mouse down");
        var clientX = ev.clientX;
        var clientY = ev.clientY;
@@ -1508,21 +1701,31 @@ function MaxPlot(div, top, left, width, height, args) {
 
        // user did not move the mouse, so this is a click
        if (mouseDidNotMove) {
-            var clickedLabel = self.labelAt(x2, y2);
-            if (clickedLabel!==null)
-                self.onLabelClick(clickedLabel, ev);
+            // recognize a double click -> zoom
+            if (self.lastClick!==undefined && x2===self.lastClick[0] && y2===self.lastClick[1]) {
+                self.zoomBy(1.33);
+                self.lastClick = [-1,-1];
+            }
+            self.lastClick = [x2, y2];
+
+            var labelInfo = self.labelAt(x2, y2);
+            if (labelInfo!==null && self.port.doDrawLabels)
+                self.onLabelClick(labelInfo[0], labelInfo[1], ev);
             else {
                 var clickedCellIds = self.cellsAt(x2, y2);
+                // click on a cell -> update selection and redraw
                 if (clickedCellIds!==null && self.onCellClick!==null) {
                     self.selCells = clickedCellIds;
-                    self.onCellClick(clickedCellIds, ev);
                     self.drawDots();
+                    self.onCellClick(clickedCellIds, ev);
+
                 }
                 else {
                 // user clicked onto background:
                 // reset selection and redraw
                     console.log("not moved at all: reset "+clientX+" "+self.mouseDownX+" "+self.mouseDownY+" "+clientY);
                     self.selectClear();
+                    
                     self.drawDots();
                 }
 
@@ -1539,8 +1742,17 @@ function MaxPlot(div, top, left, width, height, args) {
        var anyKey = (ev.metaKey || ev.altKey || ev.shiftKey);
 
        // zooming
-       if ((self.dragMode==="zoom" && !anyKey) || ev.metaKey )
-           self.zoomTo(x1, y1, x2, y2);
+       if ((self.dragMode==="zoom" && !anyKey) || ev.metaKey ) {
+           // get current coords of the marquee
+            var div = self.selectBox;
+            var zoomX1 = parseInt(div.style.left.replace("px","")) - canvasLeft;
+            var zoomY1 = parseInt(div.style.top.replace("px","")) - canvasTop;
+            var zoomX2 = zoomX1+parseInt(div.style.width.replace("px",""));
+            var zoomY2 = zoomY1+parseInt(div.style.height.replace("px",""));
+            var zoomY1 = self.height - zoomY1;
+            var zoomY2 = self.height - zoomY2;
+            self.zoomTo(zoomX1, zoomY1, zoomX2, zoomY2);
+       }
        // marquee select 
        else if ((self.dragMode==="select" && !anyKey) || ev.shiftKey ) {
            if (! ev.shiftKey)
@@ -1558,14 +1770,16 @@ function MaxPlot(div, top, left, width, height, args) {
 
     this.onWheel = function(ev) {
         /* called when the user moves the mouse wheel */
+        if (self.parentPlot!==null)
+            return;
         console.log(ev);
         var normWheel = normalizeWheel(ev);
         console.log(normWheel);
         var pxX = ev.clientX - self.left;
         var pxY = ev.clientY - self.top;
         var spinFact = 0.1;
-        if (ev.ctrlKey) // = OSX pinch and zoom gesture
-            spinFact = 0.02;  // is too fast, so slow it down a little
+        if (ev.ctrlKey) // = OSX pinch and zoom gesture (and no other OS/mouse combination?)
+            spinFact = 0.08;  // is too fast, so slow it down a little
         var zoomFact = 1-(spinFact*normWheel.spinY);
         console.log("Wheel Zoom by "+zoomFact);
         self.zoomBy(zoomFact, pxX, pxY);
@@ -1587,7 +1801,21 @@ function MaxPlot(div, top, left, width, height, args) {
     };
 
     this.setShowLabels = function(doShow) {
-        self.doDrawLabels = doShow;
+        self.port.doDrawLabels = doShow;
+    };
+
+    this.setLabels = function(newLabels) {
+        /* set new label text */
+        if (newLabels.length!==self.coords.labels.length) {
+            console.log("maxPlot:setLabels error: new labels have wrong length.");
+            return;
+        }
+
+        for (var i = 0; i<newLabels.length; i++)
+            self.coords.labels[i][2] = newLabels[i];
+
+       self.coords.pxLabels = scaleLabels(self.coords.labels, self.port.zoomRange, self.port.radius, 
+                                           self.canvas.width, self.canvas.height);
     };
 
     this.activateMode = function(modeName) {
@@ -1608,13 +1836,14 @@ function MaxPlot(div, top, left, width, height, args) {
 
         self.resetMarquee();
 
-        self.icons["move"].style.backgroundColor = gButtonBackground; 
-        self.icons["zoom"].style.backgroundColor = gButtonBackground; 
-        self.icons["select"].style.backgroundColor = gButtonBackground; 
-        self.icons[modeName].style.backgroundColor = gButtonBackgroundClicked; 
-
-        //var upModeName = modeName[0].toUpperCase() + modeName.slice(1);
-        //var buttonId = "mpIconMode"+upModeName;
+        if (self.interact) {
+            self.icons["move"].style.backgroundColor = gButtonBackground; 
+            self.icons["zoom"].style.backgroundColor = gButtonBackground; 
+            self.icons["select"].style.backgroundColor = gButtonBackground; 
+            self.icons[modeName].style.backgroundColor = gButtonBackgroundClicked; 
+        }
+        if (self.childPlot)
+            self.childPlot.activateMode(modeName);
     }
 
     this.randomDots = function(n, radius, mode) {
@@ -1630,7 +1859,7 @@ function MaxPlot(div, top, left, width, height, args) {
 
         if (mode!==undefined)
             self.mode = mode;
-        self.radius = radius;
+        self.port.radius = radius;
 	self.setCoords(randomArray(Uint16Array, 2*n, 65535));
 	self.setColors(["FF0000", "00FF00", "0000FF", "CC00CC", "008800"]);
 	self.setColorArr(randomArray(Uint8Array, n, 4));
@@ -1639,7 +1868,76 @@ function MaxPlot(div, top, left, width, height, args) {
         self.drawDots();
         console.timeEnd("draw");
         return self;
+    };
 
+    this.unsplit = function() {
+        /* remove the connected non-active renderer */
+        //var canvWidth = window.innerWidth - canvLeft - legendBarWidth;
+        self.setSize(self.width*2, self.height);
+        var otherRend = self.childPlot;
+        self.childPlot = undefined;
+        if (!otherRend) {
+            otherRend = self.parentPlot;
+            self.parentPlot = undefined;
+        }
+
+        //var left = Math.min(self.left, otherRend.left);
+        //self.setTopLeft(self.top, left);
+
+        otherRend.div.remove();
+        self.canvas.style["border"] = "none";
+        return;
+    }
+
+    this.split = function() {
+        /* reduce width of renderer, create new renderer and place both side-by-side */
+        var canvHeight  = self.height;
+        var canvLeft    = self.left;
+        var newWidth = self.width/2;
+        var newTop   = self.top;
+        var newLeft  = self.left+newWidth;
+        var newHeight = canvHeight+gStatusHeight;
+
+        self.setSize(newWidth, newHeight);
+
+        var newDiv = document.createElement('div');
+        newDiv.id = "mpPlot2";
+        document.body.appendChild(newDiv);
+        var plot2 = new MaxPlot(newDiv, newTop, newLeft, newWidth, newHeight, {"showClose" : true});
+        //plot2.canvas.style.borderLeft = "1px solid grey";
+
+        plot2.port = self.port;
+        plot2.selCells = self.selCells;
+
+        plot2.coords = Object.assign({}, self.coords); // = shallow copy
+
+        plot2.col = {};
+        plot2.col.pal = self.col.pal;
+        plot2.col.arr = self.col.arr;
+
+        plot2.onLabelClick = self.onLabelClick;
+        plot2.onCellClick = self.onCellClick;
+        plot2.onCellHover = self.onCellHover;
+        plot2.onNoCellHover = self.onNoCellHover;
+        plot2.onSelChange = self.onSelChange;
+        plot2.onLabelHover = self.onLabelHover;
+        plot2.onNoLabelHover = self.onNoLabelHover;
+        plot2.onActiveChange = self.onActiveChange;
+
+        //var closeButton = gebi('mpCloseButton');
+        //closeButton.addEventListener('click', self.unsplit);
+
+        plot2.drawDots();
+
+        self.childPlot = plot2;
+        plot2.parentPlot = self;
+        
+        // add a thick border and hide the menus in the child
+        self.canvas.style["border"] = "2px solid black";
+        self.childPlot.zoomDiv.style.display = "none";
+        self.childPlot.toolDiv.style.display = "none";
+
+        return plot2;
     };
 
     // object constructor code
